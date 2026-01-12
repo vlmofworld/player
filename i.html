@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LPTV Player (AutoPlay)</title>
+    
+    <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+    
+    <style>
+        body { 
+            margin: 0; 
+            background: #000; 
+            height: 100vh; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            overflow: hidden; 
+            font-family: Arial, sans-serif;
+        }
+        .container { 
+            width: 100%; 
+            height: 100%; 
+            position: relative;
+        }
+        video { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+        }
+        .error-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background: rgba(255, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="loading" id="loading">Loading stream...</div>
+    <div class="error-message" id="errorMessage"></div>
+    <video id="player" controls crossorigin playsinline muted autoplay></video>
+</div>
+
+<script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const source = urlParams.get('id');
+        const video = document.getElementById('player');
+        const loading = document.getElementById('loading');
+        const errorMessage = document.getElementById('errorMessage');
+
+        if (!source) {
+            showError('No stream URL provided! Use ?id=YOUR_M3U8_LINK');
+            return;
+        }
+
+        // Validate URL
+        if (!isValidUrl(source)) {
+            showError('Invalid URL format. Please provide a valid m3u8 URL.');
+            return;
+        }
+
+        // Plyr Options
+        const playerOptions = {
+            autoplay: true,
+            muted: true,
+            volume: 0.5,
+            controls: [
+                'play-large',
+                'play',
+                'progress',
+                'current-time',
+                'mute',
+                'volume',
+                'fullscreen'
+            ],
+            debug: false,
+            hideControls: false,
+            storage: { enabled: false }
+        };
+
+        let player;
+        let hls;
+
+        function initializePlayer() {
+            try {
+                player = new Plyr(video, playerOptions);
+                
+                // Event listeners for better UX
+                player.on('ready', () => {
+                    loading.style.display = 'none';
+                    console.log('Player ready');
+                });
+
+                player.on('error', (event) => {
+                    console.error('Player error:', event.detail);
+                    showError('Playback error. The stream might be unavailable.');
+                });
+
+                player.on('playing', () => {
+                    console.log('Playing started');
+                    loading.style.display = 'none';
+                });
+
+            } catch (error) {
+                console.error('Failed to initialize player:', error);
+                showError('Failed to initialize video player.');
+            }
+        }
+
+        function showError(message) {
+            loading.style.display = 'none';
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            console.error(message);
+        }
+
+        function isValidUrl(string) {
+            try {
+                const url = new URL(string);
+                return url.protocol === 'http:' || url.protocol === 'https:';
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function setupHls() {
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    enableWorker: true,
+                    lowLatencyMode: true,
+                    backBufferLength: 90
+                });
+                
+                hls.loadSource(source);
+                hls.attachMedia(video);
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    initializePlayer();
+                    // Auto-play attempt
+                    const playPromise = video.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(error => {
+                            console.log('Auto-play prevented:', error);
+                            // Show play button if autoplay is blocked
+                        });
+                    }
+                });
+
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    console.error('HLS Error:', data);
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                showError('Network error. Trying to reconnect...');
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                showError('Media error. Attempting recovery...');
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                showError('Fatal error. Please reload.');
+                                hls.destroy();
+                                break;
+                        }
+                    }
+                });
+
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // For Safari/iOS
+                video.src = source;
+                initializePlayer();
+                
+                // Add event listener for iOS
+                video.addEventListener('loadedmetadata', () => {
+                    const playPromise = video.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(e => {
+                            console.log('iOS autoplay prevented:', e);
+                        });
+                    }
+                });
+            } else {
+                showError("Your browser doesn't support HLS streaming.");
+            }
+        }
+
+        // Start setup
+        setupHls();
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (hls) {
+                hls.destroy();
+            }
+            if (player) {
+                player.destroy();
+            }
+        });
+    });
+</script>
+
+</body>
+</html>
